@@ -1,5 +1,17 @@
-polars
-maturin
-ruff
-pytest
-mypy
+argcomplete==3.5.0
+click==8.1.7
+iniconfig==2.0.0
+maturin==1.7.1
+-e git+ssh://git@github.com/corwinjoy/pl_array.git@5621cf5eccf403c27159a64df9d0b3ce83debc7a#egg=minimal_plugin&subdirectory=minimal_plugin
+mypy==1.11.2
+mypy-extensions==1.0.0
+packaging==24.1
+patchelf==0.17.2.1
+pipx==1.7.1
+platformdirs==4.3.6
+pluggy==1.5.0
+polars==1.7.1
+pytest==8.3.3
+ruff==0.6.5
+typing_extensions==4.12.2
+userpath==1.9.2
