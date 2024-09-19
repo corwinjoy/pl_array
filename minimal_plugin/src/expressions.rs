@@ -1,5 +1,6 @@
 #![allow(clippy::unused_unit)]
 use polars::prelude::*;
+use polars::datatypes::DataType;
 use pyo3_polars::derive::polars_expr;
 use std::fmt::Write;
 use serde::Deserialize;
@@ -78,13 +79,16 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
 
 #[derive(Deserialize)]
 struct ArrayKwargs {
+    // I get the error: the trait `Deserialize<'_>` is not implemented for `DataType`
+    // But this is defined in
+    // crates/polars-core/src/datatypes/_serde.rs
     dtype: DataType,
 }
 
 #[polars_expr(output_type_func=array_output_type)]
 fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
-    let dtype = &kwargs.dtype;
     let s = &inputs[0];
+    let dtype = &kwargs.dtype;
     polars_ensure!(
         s.dtype() == dtype,
         ComputeError: "Expected {}, got: {}", dtype, s.dtype()
