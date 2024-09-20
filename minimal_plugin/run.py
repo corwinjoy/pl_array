@@ -2,6 +2,8 @@ import polars as pl
 import minimal_plugin as mp
 from minimal_plugin import pig_latinnify
 
+pl.Config.set_verbose(True)
+
 def pig():
     df = pl.DataFrame(
         {
@@ -31,11 +33,24 @@ def print_array():
         },
     )
     print(array_df)
-
-    data = {"col1": [0, 2], "col2": [3, 7]}
-    df2 = pl.DataFrame(data, schema={"col1": pl.Float32, "col2": pl.Int64})
-    df2
     
-# test_noop()
+def build_array():
+    df = pl.DataFrame(
+        [
+            pl.Series("Array", [[0, 0], [0, 0]]),
+            pl.Series("f1", [1, 2]),
+            pl.Series("f2", [3, 4]),
+        ],
+        schema={
+            "Array": pl.Array(pl.Float64, 2),
+            "f1": pl.Float64,
+            "f2": pl.Float64,
+        },
+    )
+    print(df)
 
-print_array()
+    # Now we call our plugin:
+    result = print(df.with_columns(mp.array(pl.all(), dtype="f64").name.suffix('_sum')))
+    print(result)
+
+build_array()

@@ -5,7 +5,7 @@ use pyo3_polars::derive::polars_expr;
 use std::fmt::Write;
 use polars::export::arrow::legacy::utils::CustomIterTools;
 use serde::Deserialize;
-use polars_core::utils::Wrap;
+// use polars_core::utils::Wrap;
 
 #[polars_expr(output_type=String)]
 fn pig_latinnify(inputs: &[Series]) -> PolarsResult<Series> {
@@ -34,7 +34,8 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
         // TODO: Allow specifying dtype?
         polars_bail!(ComputeError: "need at least one input field to determine dtype")
     }
-    let expected_dtype: DataType = input_fields[0].dtype.clone();
+    // let expected_dtype: DataType = input_fields[1].dtype.clone();
+    let expected_dtype: DataType = DataType::Float64;
     for field in input_fields.iter().skip(1) {
         if field.dtype != expected_dtype {
             // TODO: Support casting?
@@ -43,7 +44,14 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
     }
     Ok(Field::new(
         PlSmallStr::from_static("array"),  // Not sure how to set field name, maybe take the first input field name, or concatenate names?
-        DataType::Array(Box::new(expected_dtype), input_fields.len()),
+        DataType::Array(Box::new(expected_dtype), input_fields.len()-1),
+    ))
+}
+
+pub fn array2_output(_: &[Field]) -> PolarsResult<Field> {
+    Ok(Field::new(
+        PlSmallStr::from_static("arr"),
+        DataType::Array(Box::new(DataType::Float64), 2),
     ))
 }
 
@@ -56,8 +64,12 @@ struct ArrayKwargs {
     dtype: String,
 }
 
-#[polars_expr(output_type_func=array_output_type)]
+#[polars_expr(output_type_func=array2_output)]
 fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
+    array_internal(inputs, kwargs)
+}
+
+fn array_internal(inputs: &[Series], _kwargs: ArrayKwargs) -> PolarsResult<Series> {
 
 
     // TODO. Figure out how to pass an optional dtype
@@ -83,8 +95,7 @@ fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
             let mut cols_ca_iter = cols_ca.iter();
             let out_inner: Float64Chunked = ca
                 .iter()
-                .enumerate()
-                .map(|(idx, opt_val)| {
+                .map(|opt_val| {
                     opt_val.map(|val| {
                         val + cols_ca_iter.next().unwrap().as_ref().unwrap().value_unchecked(row_idx)
                     })
@@ -95,6 +106,47 @@ fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
 
     Ok(out.into_series())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_array() {
+        let mut col1: ListPrimitiveChunkedBuilder<Float64Type> =
+            ListPrimitiveChunkedBuilder::new("Array_1".into(), 8, 8,
+                                             DataType::Float64);
+        col1.append_slice(&[0.0, 0.0]);
+        col1.append_slice(&[0.0, 0.0]);
+
+        let f1 = Series::new("f1".into(), &[1.0, 2.0]);
+        let f2 = Series::new("f2".into(), &[3.0, 4.0]);
+
+        let cols = vec![
+            col1.finish().into_series(),
+            f1,
+            f2
+        ];
+
+        let array_df = DataFrame::new(cols.clone()).unwrap();
+        println!("input df\n{}", &array_df);
+
+        let mut fields: Vec<Field> = Vec::new();
+        for col in &cols{
+            let f: Field = (col.field().to_mut()).clone();
+            fields.push(f);
+        }
+        let expected_result = array_output_type(&fields).unwrap();
+        println!("expected result\n{:?}", &expected_result);
+
+        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
+        let new_arr = array_internal(&cols, kwargs);
+        println!("actual result\n{:?}", &new_arr);
+
+        // TODO check output type
+    }
+}
+
 
 /*
 /// Concat lists entries.

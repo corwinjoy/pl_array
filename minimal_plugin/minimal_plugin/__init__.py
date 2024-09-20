@@ -30,3 +30,11 @@ def noop(expr: IntoExpr) -> pl.Expr:
         is_elementwise=True,
     )
 
+def array(expr: IntoExpr, dtype: str) -> pl.Expr:
+    return register_plugin_function(
+        args=[expr],
+        plugin_path=LIB,
+        function_name="array",
+        is_elementwise=True,
+        kwargs={"dtype": dtype},
+    )
