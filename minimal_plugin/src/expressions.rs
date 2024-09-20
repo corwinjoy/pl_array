@@ -3,7 +3,9 @@ use polars::prelude::*;
 use polars::datatypes::DataType;
 use pyo3_polars::derive::polars_expr;
 use std::fmt::Write;
+use polars::export::arrow::legacy::utils::CustomIterTools;
 use serde::Deserialize;
+use polars_core::utils::Wrap;
 
 #[polars_expr(output_type=String)]
 fn pig_latinnify(inputs: &[Series]) -> PolarsResult<Series> {
@@ -27,44 +29,12 @@ fn noop(inputs: &[Series]) -> PolarsResult<Series> {
     Ok(s.clone())
 }
 
-/*
-pub fn point_2d_output(_: &[Field]) -> PolarsResult<Field> {
-    Ok(Field::new(
-        PlSmallStr::from_static("point_2d"),
-        DataType::Array(Box::new(DataType::Float64), 2),
-    ))
-}
-
-#[polars_expr(output_type_func=point_2d_output)]
-fn midpoint_2d(inputs: &[Series], kwargs: MidPoint2DKwargs) -> PolarsResult<Series> {
-    let ca: &ArrayChunked = inputs[0].array()?;
-    let ref_point = kwargs.ref_point;
-
-    let out: ArrayChunked = unsafe {
-        ca.try_apply_amortized_same_type(|row| {
-            let s = row.as_ref();
-            let ca = s.f64()?;
-            let out_inner: Float64Chunked = ca
-                .iter()
-                .enumerate()
-                .map(|(idx, opt_val)| {
-                    opt_val.map(|val| {
-                        (val + ref_point[idx]) / 2.0f64
-                    })
-                }).collect_trusted();
-            Ok(out_inner.into_series())
-        })}?;
-
-    Ok(out.into_series())
-}
-*/
-
 pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
     if input_fields.is_empty() {
         // TODO: Allow specifying dtype?
         polars_bail!(ComputeError: "need at least one input field to determine dtype")
     }
-    let expected_dtype: DataType = input_fields[0].dtype;
+    let expected_dtype: DataType = input_fields[0].dtype.clone();
     for field in input_fields.iter().skip(1) {
         if field.dtype != expected_dtype {
             // TODO: Support casting?
@@ -79,27 +49,50 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
 
 #[derive(Deserialize)]
 struct ArrayKwargs {
-    // I get the error: the trait `Deserialize<'_>` is not implemented for `DataType`
-    // But this is defined in
-    // crates/polars-core/src/datatypes/_serde.rs
-    dtype: DataType,
+    // I guess DataType is not one of the serializable types?
+    // In the source code I see this done vie Wrap<DataType>
+    // e.g. polars/crates/polars-python/src/series /construction.rs
+    // fn new_from_any_values_and_dtype
+    dtype: String,
 }
 
 #[polars_expr(output_type_func=array_output_type)]
 fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
+
+
+    // TODO. Figure out how to pass an optional dtype
+    /*
+    let dtype: DataType = &kwargs.dtype;
     let s = &inputs[0];
-    let dtype = &kwargs.dtype;
     polars_ensure!(
         s.dtype() == dtype,
         ComputeError: "Expected {}, got: {}", dtype, s.dtype()
     );
+    */
 
-    // TODO
-    let s = &inputs[0];
-    let ca = s.str()?;
-    let out = ca.apply_into_string_amortized(|value, output| {
-        write!(output, "{}{}", value, kwargs.dtype).unwrap();
-    });
+    let out_arr: &ArrayChunked = inputs[0].array()?; // TODO, create new array of 0s here
+    let mut one_plus = inputs.as_ref().iter(); // Columns 1 and up
+    one_plus.next();
+    let cols_ca: Vec<_> = one_plus.map(|e| e.f64()).collect();
+    let mut row_idx = 0;
+
+    let out: ArrayChunked = unsafe {
+        out_arr.try_apply_amortized_same_type(|row| {
+            let s = row.as_ref();
+            let ca = s.f64()?;
+            let mut cols_ca_iter = cols_ca.iter();
+            let out_inner: Float64Chunked = ca
+                .iter()
+                .enumerate()
+                .map(|(idx, opt_val)| {
+                    opt_val.map(|val| {
+                        val + cols_ca_iter.next().unwrap().as_ref().unwrap().value_unchecked(row_idx)
+                    })
+                }).collect_trusted();
+            row_idx += 1;
+            Ok(out_inner.into_series())
+        })}?;
+
     Ok(out.into_series())
 }
 
