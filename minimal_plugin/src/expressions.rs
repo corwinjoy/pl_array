@@ -48,13 +48,6 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
     ))
 }
 
-pub fn array2_output(_: &[Field]) -> PolarsResult<Field> {
-    Ok(Field::new(
-        PlSmallStr::from_static("arr"),
-        DataType::Array(Box::new(DataType::Float64), 2),
-    ))
-}
-
 #[derive(Deserialize)]
 struct ArrayKwargs {
     // I guess DataType is not one of the serializable types?
@@ -64,7 +57,7 @@ struct ArrayKwargs {
     dtype: String,
 }
 
-#[polars_expr(output_type_func=array2_output)]
+#[polars_expr(output_type_func=array_output_type)]
 fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
     array_internal(inputs, kwargs)
 }
@@ -116,20 +109,23 @@ mod tests {
         let mut col1: ListPrimitiveChunkedBuilder<Float64Type> =
             ListPrimitiveChunkedBuilder::new("Array_1".into(), 8, 8,
                                              DataType::Float64);
-        col1.append_slice(&[0.0, 0.0]);
-        col1.append_slice(&[0.0, 0.0]);
+        col1.append_slice(&[1.0, 2.0]);
+        col1.append_slice(&[3.0, 4.0]);
+
+        let s = col1.finish().into_series();
+        let sa = s.cast(&DataType::Array(Box::new(DataType::Float64), 2)).unwrap();
 
         let f1 = Series::new("f1".into(), &[1.0, 2.0]);
         let f2 = Series::new("f2".into(), &[3.0, 4.0]);
 
         let cols = vec![
-            col1.finish().into_series(),
+            sa,
             f1,
             f2
         ];
 
         let array_df = DataFrame::new(cols.clone()).unwrap();
-        println!("input df\n{}", &array_df);
+        println!("input df\n{}\n", &array_df);
 
         let mut fields: Vec<Field> = Vec::new();
         for col in &cols{
@@ -137,13 +133,14 @@ mod tests {
             fields.push(f);
         }
         let expected_result = array_output_type(&fields).unwrap();
-        println!("expected result\n{:?}", &expected_result);
+        println!("expected result\n{:?}\n", &expected_result);
 
         let kwargs = ArrayKwargs{dtype: "f64".to_string()};
         let new_arr = array_internal(&cols, kwargs);
         println!("actual result\n{:?}", &new_arr);
 
-        // TODO check output type
+        assert!(new_arr.is_ok());
+        assert_eq!(new_arr.unwrap().dtype(), expected_result.dtype());
     }
 }
 
