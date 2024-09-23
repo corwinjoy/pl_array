@@ -4,6 +4,7 @@ use polars::datatypes::DataType;
 use pyo3_polars::derive::polars_expr;
 use std::fmt::Write;
 use polars::export::arrow::legacy::utils::CustomIterTools;
+use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
 // use polars_core::utils::Wrap;
 
@@ -34,8 +35,7 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
         // TODO: Allow specifying dtype?
         polars_bail!(ComputeError: "need at least one input field to determine dtype")
     }
-    // let expected_dtype: DataType = input_fields[1].dtype.clone();
-    let expected_dtype: DataType = DataType::Float64;
+    let expected_dtype: DataType = input_fields[0].dtype.clone();
     for field in input_fields.iter().skip(1) {
         if field.dtype != expected_dtype {
             // TODO: Support casting?
@@ -44,7 +44,7 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
     }
     Ok(Field::new(
         PlSmallStr::from_static("array"),  // Not sure how to set field name, maybe take the first input field name, or concatenate names?
-        DataType::Array(Box::new(expected_dtype), input_fields.len()-1),
+        DataType::Array(Box::new(expected_dtype), input_fields.len()),
     ))
 }
 
@@ -63,8 +63,6 @@ fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
 }
 
 fn array_internal(inputs: &[Series], _kwargs: ArrayKwargs) -> PolarsResult<Series> {
-
-
     // TODO. Figure out how to pass an optional dtype
     /*
     let dtype: DataType = &kwargs.dtype;
@@ -75,29 +73,31 @@ fn array_internal(inputs: &[Series], _kwargs: ArrayKwargs) -> PolarsResult<Serie
     );
     */
 
-    let out_arr: &ArrayChunked = inputs[0].array()?; // TODO, create new array of 0s here
-    let mut one_plus = inputs.as_ref().iter(); // Columns 1 and up
-    one_plus.next();
-    let cols_ca: Vec<_> = one_plus.map(|e| e.f64()).collect();
-    let mut row_idx = 0;
+    let rows = inputs[0].len();
+    let cols = inputs.len();
+    let capacity =  cols * rows;
+    let mut rows_ca: ListPrimitiveChunkedBuilder<Float64Type> =
+        ListPrimitiveChunkedBuilder::new("Array".into(), capacity, capacity,
+                                         DataType::Float64);
+    let mut cols_ca: Vec<_> = inputs.as_ref().iter().map(|e|
+        e.f64().unwrap().iter()).collect();
 
-    let out: ArrayChunked = unsafe {
-        out_arr.try_apply_amortized_same_type(|row| {
-            let s = row.as_ref();
-            let ca = s.f64()?;
-            let mut cols_ca_iter = cols_ca.iter();
-            let out_inner: Float64Chunked = ca
-                .iter()
-                .map(|opt_val| {
-                    opt_val.map(|val| {
-                        val + cols_ca_iter.next().unwrap().as_ref().unwrap().value_unchecked(row_idx)
-                    })
-                }).collect_trusted();
-            row_idx += 1;
-            Ok(out_inner.into_series())
-        })}?;
+    let mut row: Vec<f64> = Vec::with_capacity(cols);
+    for _i in 0..rows {
+        row.clear();
+        for j in 0..cols {
+            if let Some(Some(val))  = cols_ca[j].next() {
+                row.push(val);
+            } else {
+                row.push(0.0);
+            }
+        }
+        rows_ca.append_slice(&row);
+    }
 
-    Ok(out.into_series())
+    let s = rows_ca.finish().into_series();
+    let sa = s.cast(&DataType::Array(Box::new(DataType::Float64), cols))?;
+    Ok(sa.into_series())
 }
 
 #[cfg(test)]
@@ -106,20 +106,10 @@ mod tests {
 
     #[test]
     fn test_array() {
-        let mut col1: ListPrimitiveChunkedBuilder<Float64Type> =
-            ListPrimitiveChunkedBuilder::new("Array_1".into(), 8, 8,
-                                             DataType::Float64);
-        col1.append_slice(&[1.0, 2.0]);
-        col1.append_slice(&[3.0, 4.0]);
-
-        let s = col1.finish().into_series();
-        let sa = s.cast(&DataType::Array(Box::new(DataType::Float64), 2)).unwrap();
-
         let f1 = Series::new("f1".into(), &[1.0, 2.0]);
         let f2 = Series::new("f2".into(), &[3.0, 4.0]);
 
         let cols = vec![
-            sa,
             f1,
             f2
         ];

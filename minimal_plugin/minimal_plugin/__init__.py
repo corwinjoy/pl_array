@@ -37,4 +37,5 @@ def array(expr: IntoExpr, dtype: str) -> pl.Expr:
         function_name="array",
         is_elementwise=True,
         kwargs={"dtype": dtype},
+        input_wildcard_expansion = True # It seems we need this to get all columns at once?
     )

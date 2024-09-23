@@ -1,3 +1,5 @@
+from time import sleep
+
 import polars as pl
 import minimal_plugin as mp
 from minimal_plugin import pig_latinnify
@@ -37,12 +39,10 @@ def print_array():
 def build_array():
     df = pl.DataFrame(
         [
-            pl.Series("Array", [[0, 0], [0, 0]]),
             pl.Series("f1", [1, 2]),
             pl.Series("f2", [3, 4]),
         ],
         schema={
-            "Array": pl.Array(pl.Float64, 2),
             "f1": pl.Float64,
             "f2": pl.Float64,
         },
@@ -50,7 +50,8 @@ def build_array():
     print(df)
 
     # Now we call our plugin:
-    result = print(df.with_columns(mp.array(pl.all(), dtype="f64").name.suffix('_sum')))
+    # sleep(30)
+    result = print(df.with_columns(arr=mp.array(pl.all(), dtype="f64")))
     print(result)
 
 build_array()
