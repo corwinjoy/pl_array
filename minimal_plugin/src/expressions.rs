@@ -2,32 +2,18 @@
 use polars::prelude::*;
 use polars::datatypes::DataType;
 use pyo3_polars::derive::polars_expr;
-use std::fmt::Write;
-use polars::export::arrow::legacy::utils::CustomIterTools;
+// use polars::export::arrow::legacy::utils::CustomIterTools;
 use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
 // use polars_core::utils::Wrap;
 
-#[polars_expr(output_type=String)]
-fn pig_latinnify(inputs: &[Series]) -> PolarsResult<Series> {
-    let ca: &StringChunked = inputs[0].str()?;
-    let out: StringChunked = ca.apply_into_string_amortized(|value: &str, output: &mut String| {
-        if let Some(first_char) = value.chars().next() {
-            write!(output, "{}{}ay", &value[1..], first_char).unwrap()
-        }
-    });
-    Ok(out.into_series())
-}
-
-fn same_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
-    let field = &input_fields[0];
-    Ok(field.clone())
-}
-
-#[polars_expr(output_type_func=same_output_type)]
-fn noop(inputs: &[Series]) -> PolarsResult<Series> {
-    let s = &inputs[0];
-    Ok(s.clone())
+#[derive(Deserialize)]
+struct ArrayKwargs {
+    // I guess DataType is not one of the serializable types?
+    // In the source code I see this done vie Wrap<DataType>
+    // e.g. polars/crates/polars-python/src/series /construction.rs
+    //      fn new_from_any_values_and_dtype
+    dtype: String,
 }
 
 pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
@@ -48,15 +34,9 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
     ))
 }
 
-#[derive(Deserialize)]
-struct ArrayKwargs {
-    // I guess DataType is not one of the serializable types?
-    // In the source code I see this done vie Wrap<DataType>
-    // e.g. polars/crates/polars-python/src/series /construction.rs
-    // fn new_from_any_values_and_dtype
-    dtype: String,
-}
-
+// It looks like output_type_fn_kwargs can support keyword arguments??
+// But I can't find any docs and am not sure how to use it.
+// #[polars_expr(output_type_fn_kwargs=array_output_type)]
 #[polars_expr(output_type_func=array_output_type)]
 fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
     array_internal(inputs, kwargs)
@@ -122,10 +102,10 @@ mod tests {
             let f: Field = (col.field().to_mut()).clone();
             fields.push(f);
         }
+        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
         let expected_result = array_output_type(&fields).unwrap();
         println!("expected result\n{:?}\n", &expected_result);
 
-        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
         let new_arr = array_internal(&cols, kwargs);
         println!("actual result\n{:?}", &new_arr);
 

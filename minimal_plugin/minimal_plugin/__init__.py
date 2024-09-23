@@ -14,22 +14,6 @@ if TYPE_CHECKING:
 LIB = Path(__file__).parent
 
 
-def pig_latinnify(expr: IntoExpr) -> pl.Expr:
-    return register_plugin_function(
-        args=[expr],
-        plugin_path=LIB,
-        function_name="pig_latinnify",
-        is_elementwise=True,
-    )
-    
-def noop(expr: IntoExpr) -> pl.Expr:
-    return register_plugin_function(
-        args=[expr],
-        plugin_path=LIB,
-        function_name="noop",
-        is_elementwise=True,
-    )
-
 def array(expr: IntoExpr, dtype: str) -> pl.Expr:
     return register_plugin_function(
         args=[expr],
