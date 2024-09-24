@@ -1,11 +1,9 @@
 #![allow(clippy::unused_unit)]
+#![allow(unexpected_cfgs)]
 use polars::prelude::*;
-use polars::datatypes::DataType;
 use pyo3_polars::derive::polars_expr;
-// use polars::export::arrow::legacy::utils::CustomIterTools;
 use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
-// use polars_core::utils::Wrap;
 
 #[derive(Deserialize)]
 struct ArrayKwargs {
@@ -22,6 +20,11 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
         polars_bail!(ComputeError: "need at least one input field to determine dtype")
     }
     let expected_dtype: DataType = input_fields[0].dtype.clone();
+
+    if !expected_dtype.is_numeric() {
+        polars_bail!(ComputeError: "all input fields must be numeric")
+    }
+
     for field in input_fields.iter().skip(1) {
         if field.dtype != expected_dtype {
             // TODO: Support casting?
@@ -42,6 +45,7 @@ fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
     array_internal(inputs, kwargs)
 }
 
+// Create a new array from a slice of series
 fn array_internal(inputs: &[Series], _kwargs: ArrayKwargs) -> PolarsResult<Series> {
     // TODO. Figure out how to pass an optional dtype
     /*
@@ -53,41 +57,103 @@ fn array_internal(inputs: &[Series], _kwargs: ArrayKwargs) -> PolarsResult<Serie
     );
     */
 
+    let dtype: &DataType = inputs[0].dtype();
+
+    /*
+    I feel like there should be some kind of function to map DataType to native types
+    But, I can't seem to find it so I have a manual map for now.
+    I do also see dispatch code like this in the source code, so maybe there is no such function?
+     */
+
+    match dtype {
+        #[cfg(feature = "dtype-u8")]
+        DataType::UInt8 => array_numeric::<UInt8Type>(inputs, dtype),
+        #[cfg(feature = "dtype-u16")]
+        DataType::UInt16 => array_numeric::<UInt16Type>(inputs, dtype),
+        DataType::UInt32 => array_numeric::<UInt32Type>(inputs, dtype),
+        DataType::UInt64 => array_numeric::<UInt64Type>(inputs, dtype),
+        #[cfg(feature = "dtype-i8")]
+        DataType::Int8 => array_numeric::<Int8Type>(inputs, dtype),
+        #[cfg(feature = "dtype-i16")]
+        DataType::Int16 => array_numeric::<Int16Type>(inputs, dtype),
+        DataType::Int32 => array_numeric::<Int32Type>(inputs, dtype),
+        DataType::Int64 => array_numeric::<Int64Type>(inputs, dtype),
+        DataType::Float32 => array_numeric::<Float32Type>(inputs, dtype),
+        DataType::Float64 => array_numeric::<Float64Type>(inputs, dtype),
+        dt => polars_bail!(ComputeError: "array not implemented for dtype {:?}", dt)
+    }
+}
+
+// Combine numeric series into an array
+fn array_numeric<'a, T: PolarsNumericType>(inputs: &[Series], dtype: &DataType)
+    -> PolarsResult<Series> {
     let rows = inputs[0].len();
     let cols = inputs.len();
-    let capacity =  cols * rows;
-    let mut rows_ca: ListPrimitiveChunkedBuilder<Float64Type> =
-        ListPrimitiveChunkedBuilder::new("Array".into(), capacity, capacity,
-                                         DataType::Float64);
-    let mut cols_ca: Vec<_> = inputs.as_ref().iter().map(|e|
-        e.f64().unwrap().iter()).collect();
+    let capacity = cols * rows;
 
-    let mut row: Vec<f64> = Vec::with_capacity(cols);
+    let mut rows_ca: ListPrimitiveChunkedBuilder<T> =
+        ListPrimitiveChunkedBuilder::new("Array".into(), capacity, capacity,
+                                         dtype.clone());
+    let mut cols_ca: Vec<_> = inputs.as_ref().iter().map(|e|
+        e.unpack::<T>().unwrap().iter()).collect();
+
+    let mut row: Vec<T::Physical<'a>> = Vec::with_capacity(cols);
     for _i in 0..rows {
         row.clear();
         for j in 0..cols {
-            if let Some(Some(val))  = cols_ca[j].next() {
+            if let Some(Some(val)) = cols_ca[j].next() {
                 row.push(val);
             } else {
-                row.push(0.0);
+                row.push(T::Native::default());
             }
         }
         rows_ca.append_slice(&row);
     }
 
     let s = rows_ca.finish().into_series();
-    let sa = s.cast(&DataType::Array(Box::new(DataType::Float64), cols))?;
+    let sa = s.cast(&DataType::Array(Box::new(dtype.clone()), cols))?;
     Ok(sa.into_series())
 }
+
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_array() {
+    fn test_array_f64() {
         let f1 = Series::new("f1".into(), &[1.0, 2.0]);
         let f2 = Series::new("f2".into(), &[3.0, 4.0]);
+
+        let cols = vec![
+            f1,
+            f2
+        ];
+
+        let array_df = DataFrame::new(cols.clone()).unwrap();
+        println!("input df\n{}\n", &array_df);
+
+        let mut fields: Vec<Field> = Vec::new();
+        for col in &cols{
+            let f: Field = (col.field().to_mut()).clone();
+            fields.push(f);
+        }
+        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
+        let expected_result = array_output_type(&fields).unwrap();
+        println!("expected result\n{:?}\n", &expected_result);
+
+        let new_arr = array_internal(&cols, kwargs);
+        println!("actual result\n{:?}", &new_arr);
+
+        assert!(new_arr.is_ok());
+        assert_eq!(new_arr.unwrap().dtype(), expected_result.dtype());
+    }
+
+    #[test]
+    fn test_array_i32() {
+        let f1 = Series::new("f1".into(), &[1, 2]);
+        let f2 = Series::new("f2".into(), &[3, 4]);
 
         let cols = vec![
             f1,
