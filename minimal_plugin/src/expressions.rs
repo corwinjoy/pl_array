@@ -1,6 +1,7 @@
 #![allow(clippy::unused_unit)]
 #![allow(unexpected_cfgs)]
 use polars::prelude::*;
+use polars_plan::dsl::Expr;
 use pyo3_polars::derive::polars_expr;
 use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
@@ -11,10 +12,26 @@ struct ArrayKwargs {
     // In the source code I see this done vie Wrap<DataType>
     // e.g. polars/crates/polars-python/src/series /construction.rs
     //      fn new_from_any_values_and_dtype
-    dtype: String,
+    dtype_expr: String,
 }
 
-fn array_output_type(input_fields: &[Field], _kwargs: ArrayKwargs) -> PolarsResult<Field> {
+fn deserialize_dtype(dtype_expr: &str) -> PolarsResult<Option<DataType>> {
+    match dtype_expr.len() {
+        0 => Ok(None),
+        _ => match serde_json::from_str::<Expr>(dtype_expr) {
+            Ok(Expr::DtypeColumn(dtypes)) if dtypes.len() == 1 => Ok(Some(dtypes[0].clone())),
+            Ok(_) => Err(
+                polars_err!(ComputeError: "Expected a DtypeColumn expression with a single dtype"),
+            ),
+            Err(_) => Err(polars_err!(ComputeError: "Could not deserialize dtype expression")),
+        },
+    }
+}
+
+fn array_output_type(input_fields: &[Field], kwargs: ArrayKwargs) -> PolarsResult<Field> {
+    let dtype = deserialize_dtype(&kwargs.dtype_expr)?;
+    dbg!(dtype);
+
     if input_fields.is_empty() {
         // TODO: Allow specifying dtype?
         polars_bail!(ComputeError: "need at least one input field to determine dtype")
