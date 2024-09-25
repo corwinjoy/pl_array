@@ -14,7 +14,7 @@ struct ArrayKwargs {
     dtype: String,
 }
 
-pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
+fn array_output_type(input_fields: &[Field], _kwargs: ArrayKwargs) -> PolarsResult<Field> {
     if input_fields.is_empty() {
         // TODO: Allow specifying dtype?
         polars_bail!(ComputeError: "need at least one input field to determine dtype")
@@ -37,10 +37,7 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
     ))
 }
 
-// It looks like output_type_fn_kwargs can support keyword arguments??
-// But I can't find any docs and am not sure how to use it.
-// #[polars_expr(output_type_fn_kwargs=array_output_type)]
-#[polars_expr(output_type_func=array_output_type)]
+#[polars_expr(output_type_func_with_kwargs=array_output_type)]
 fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
     array_internal(inputs, kwargs)
 }
