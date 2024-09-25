@@ -1,20 +1,37 @@
 #![allow(clippy::unused_unit)]
 #![allow(unexpected_cfgs)]
 use polars::prelude::*;
+use polars_plan::dsl::Expr;
 use pyo3_polars::derive::polars_expr;
 use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ArrayKwargs {
     // I guess DataType is not one of the serializable types?
     // In the source code I see this done vie Wrap<DataType>
     // e.g. polars/crates/polars-python/src/series /construction.rs
     //      fn new_from_any_values_and_dtype
-    dtype: String,
+    dtype_expr: String,
 }
 
-pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
+fn deserialize_dtype(dtype_expr: &str) -> PolarsResult<Option<DataType>> {
+    match dtype_expr.len() {
+        0 => Ok(None),
+        _ => match serde_json::from_str::<Expr>(dtype_expr) {
+            Ok(Expr::DtypeColumn(dtypes)) if dtypes.len() == 1 => Ok(Some(dtypes[0].clone())),
+            Ok(_) => Err(
+                polars_err!(ComputeError: "Expected a DtypeColumn expression with a single dtype"),
+            ),
+            Err(_) => Err(polars_err!(ComputeError: "Could not deserialize dtype expression")),
+        },
+    }
+}
+
+fn array_output_type(input_fields: &[Field], kwargs: ArrayKwargs) -> PolarsResult<Field> {
+    let dtype = deserialize_dtype(&kwargs.dtype_expr)?;
+    dbg!(dtype);
+
     if input_fields.is_empty() {
         // TODO: Allow specifying dtype?
         polars_bail!(ComputeError: "need at least one input field to determine dtype")
@@ -37,10 +54,7 @@ pub fn array_output_type(input_fields: &[Field]) -> PolarsResult<Field> {
     ))
 }
 
-// It looks like output_type_fn_kwargs can support keyword arguments??
-// But I can't find any docs and am not sure how to use it.
-// #[polars_expr(output_type_fn_kwargs=array_output_type)]
-#[polars_expr(output_type_func=array_output_type)]
+#[polars_expr(output_type_func_with_kwargs=array_output_type)]
 fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
     array_internal(inputs, kwargs)
 }
@@ -139,8 +153,8 @@ mod tests {
             let f: Field = (col.field().to_mut()).clone();
             fields.push(f);
         }
-        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
-        let expected_result = array_output_type(&fields).unwrap();
+        let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Float64\"]}".to_string()};
+        let expected_result = array_output_type(&fields, kwargs.clone()).unwrap();
         println!("expected result\n{:?}\n", &expected_result);
 
         let new_arr = array_internal(&cols, kwargs);
@@ -168,8 +182,8 @@ mod tests {
             let f: Field = (col.field().to_mut()).clone();
             fields.push(f);
         }
-        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
-        let expected_result = array_output_type(&fields).unwrap();
+        let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Float64\"]}".to_string()};
+        let expected_result = array_output_type(&fields, kwargs.clone()).unwrap();
         println!("expected result\n{:?}\n", &expected_result);
 
         let new_arr = array_internal(&cols, kwargs);

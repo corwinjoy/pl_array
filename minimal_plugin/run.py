@@ -38,7 +38,7 @@ def build_array_i32():
 
     # Now we call our plugin:
     # sleep(30)
-    result = print(df.with_columns(arr=mp.array(pl.all(), dtype="f64")))
+    result = print(df.with_columns(arr=mp.array(pl.all(), dtype=pl.Float64)))
     print(result)
 
 # build_array_f64()
