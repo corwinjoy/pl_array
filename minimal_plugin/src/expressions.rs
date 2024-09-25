@@ -6,7 +6,7 @@ use pyo3_polars::derive::polars_expr;
 use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ArrayKwargs {
     // I guess DataType is not one of the serializable types?
     // In the source code I see this done vie Wrap<DataType>
@@ -153,8 +153,8 @@ mod tests {
             let f: Field = (col.field().to_mut()).clone();
             fields.push(f);
         }
-        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
-        let expected_result = array_output_type(&fields).unwrap();
+        let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Float64\"]}".to_string()};
+        let expected_result = array_output_type(&fields, kwargs.clone()).unwrap();
         println!("expected result\n{:?}\n", &expected_result);
 
         let new_arr = array_internal(&cols, kwargs);
@@ -182,8 +182,8 @@ mod tests {
             let f: Field = (col.field().to_mut()).clone();
             fields.push(f);
         }
-        let kwargs = ArrayKwargs{dtype: "f64".to_string()};
-        let expected_result = array_output_type(&fields).unwrap();
+        let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Float64\"]}".to_string()};
+        let expected_result = array_output_type(&fields, kwargs.clone()).unwrap();
         println!("expected result\n{:?}\n", &expected_result);
 
         let new_arr = array_internal(&cols, kwargs);
