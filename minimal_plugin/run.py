@@ -20,7 +20,7 @@ def build_array_f64():
 
     # Now we call our plugin:
     # sleep(30)
-    result = print(df.with_columns(arr=mp.array(pl.all(), dtype="f64")))
+    result = print(df.with_columns(arr=mp.array(pl.all(), dtype=pl.Float64)))
     print(result)
 
 def build_array_i32():
@@ -38,8 +38,8 @@ def build_array_i32():
 
     # Now we call our plugin:
     # sleep(30)
-    result = print(df.with_columns(arr=mp.array(pl.all(), dtype=pl.Float64)))
+    result = print(df.with_columns(arr=mp.array(pl.all(), dtype=pl.Int32)))
     print(result)
 
-# build_array_f64()
-build_array_i32()
+build_array_f64()
+# build_array_i32()

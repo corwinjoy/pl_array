@@ -10,8 +10,6 @@ use serde::Deserialize;
 struct ArrayKwargs {
     // I guess DataType is not one of the serializable types?
     // In the source code I see this done vie Wrap<DataType>
-    // e.g. polars/crates/polars-python/src/series /construction.rs
-    //      fn new_from_any_values_and_dtype
     dtype_expr: String,
 }
 
@@ -30,26 +28,25 @@ fn deserialize_dtype(dtype_expr: &str) -> PolarsResult<Option<DataType>> {
 
 fn array_output_type(input_fields: &[Field], kwargs: ArrayKwargs) -> PolarsResult<Field> {
     let dtype = deserialize_dtype(&kwargs.dtype_expr)?;
-    dbg!(dtype);
-
-    if input_fields.is_empty() {
-        // TODO: Allow specifying dtype?
-        polars_bail!(ComputeError: "need at least one input field to determine dtype")
-    }
     let expected_dtype: DataType = input_fields[0].dtype.clone();
 
     if !expected_dtype.is_numeric() {
         polars_bail!(ComputeError: "all input fields must be numeric")
     }
 
+    if dtype != None  && dtype.unwrap() != expected_dtype {
+        // For now, ensure we match the dtype, if provided
+        // Question: Do we want to support casting to a provided dtype?
+        polars_bail!(ComputeError: "provided dtype does not match the input columns")
+    }
+
     for field in input_fields.iter().skip(1) {
         if field.dtype != expected_dtype {
-            // TODO: Support casting?
             polars_bail!(ComputeError: "all input fields must have the same type")
         }
     }
     Ok(Field::new(
-        PlSmallStr::from_static("array"),  // Not sure how to set field name, maybe take the first input field name, or concatenate names?
+        PlSmallStr::from_static("array"),
         DataType::Array(Box::new(expected_dtype), input_fields.len()),
     ))
 }
@@ -60,18 +57,13 @@ fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
 }
 
 // Create a new array from a slice of series
-fn array_internal(inputs: &[Series], _kwargs: ArrayKwargs) -> PolarsResult<Series> {
-    // TODO. Figure out how to pass an optional dtype
-    /*
-    let dtype: DataType = &kwargs.dtype;
-    let s = &inputs[0];
-    polars_ensure!(
-        s.dtype() == dtype,
-        ComputeError: "Expected {}, got: {}", dtype, s.dtype()
-    );
-    */
+fn array_internal(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
 
-    let dtype: &DataType = inputs[0].dtype();
+    let opt_dtype = deserialize_dtype(&kwargs.dtype_expr)?;
+    let dtype = match opt_dtype {
+        Some(ref d) => d,
+        None => inputs[0].dtype()
+    };
 
     /*
     I feel like there should be some kind of function to map DataType to native types
@@ -182,7 +174,7 @@ mod tests {
             let f: Field = (col.field().to_mut()).clone();
             fields.push(f);
         }
-        let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Float64\"]}".to_string()};
+        let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Int32\"]}".to_string()};
         let expected_result = array_output_type(&fields, kwargs.clone()).unwrap();
         println!("expected result\n{:?}\n", &expected_result);
 
