@@ -2,10 +2,12 @@
 #![allow(unexpected_cfgs)]
 
 use std::collections::HashMap;
+use polars::export::arrow::array::{FixedSizeListArray, PrimitiveArray};
 use polars::prelude::*;
 use polars_plan::dsl::Expr;
 use polars_core::with_match_physical_numeric_polars_type;
 use pyo3_polars::derive::polars_expr;
+use pyo3_polars::export::polars_core::utils::arrow::bitmap::MutableBitmap;
 use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
 
@@ -77,9 +79,7 @@ fn array_numeric<'a, T: PolarsNumericType>(inputs: &[Series], dtype: &DataType)
     let cols = inputs.len();
     let capacity = cols * rows;
 
-    let mut rows_ca: ListPrimitiveChunkedBuilder<T> =
-        ListPrimitiveChunkedBuilder::new("Array".into(), capacity, capacity,
-                                         dtype.clone());
+    let mut values: Vec<T::Native> = vec![T::Native::default(); capacity];
 
     // Support for casting
     // Cast fields to the target dtype as needed
@@ -94,28 +94,45 @@ fn array_numeric<'a, T: PolarsNumericType>(inputs: &[Series], dtype: &DataType)
     let mut cols_ca = Vec::new();
     for j in 0..cols {
         if inputs[j].dtype() != dtype {
-            cols_ca.push(casts.get(&j).expect("expect conversion").unpack::<T>()?.iter());
+            cols_ca.push(casts.get(&j).expect("expect conversion").unpack::<T>()?);
         } else {
-            cols_ca.push(inputs[j].unpack::<T>()?.iter());
+            cols_ca.push(inputs[j].unpack::<T>()?);
         }
     }
 
-    let mut row: Vec<T::Physical<'a>> = Vec::with_capacity(cols);
-    for _i in 0..rows {
-        row.clear();
+    for i in 0..rows {
         for j in 0..cols {
-            if let Some(Some(val)) = cols_ca[j].next() {
-                row.push(val);
-            } else {
-                row.push(T::Native::default());
+            values[i * cols + j] = unsafe { cols_ca[j].value_unchecked(i) };
+        }
+    }
+
+    let validity = if cols_ca.iter().any(|col| col.has_nulls()) {
+        let mut validity = MutableBitmap::from_len_zeroed(capacity);
+        for (j, col) in cols_ca.iter().enumerate() {
+            let mut row_offset = 0;
+            for chunk in col.chunks() {
+                if let Some(chunk_validity) = chunk.validity() {
+                    for set_bit in chunk_validity.true_idx_iter() {
+                        validity.set(cols * (row_offset + set_bit) + j, true);
+                    }
+                } else {
+                    for chunk_row in 0..chunk.len() {
+                        validity.set(cols * (row_offset + chunk_row) + j, true);
+                    }
+                }
+                row_offset += chunk.len();
             }
         }
-        rows_ca.append_slice(&row);
-    }
+        Some(validity.into())
+    } else {
+        None
+    };
 
-    let s = rows_ca.finish().into_series();
-    let sa = s.cast(&DataType::Array(Box::new(dtype.clone()), cols))?;
-    Ok(sa.into_series())
+    let values_array = PrimitiveArray::from_vec(values).with_validity(validity);
+    let dtype = DataType::Array(Box::new(dtype.clone()), cols);
+    let arrow_dtype = dtype.to_arrow(CompatLevel::newest());
+    let array = FixedSizeListArray::try_new(arrow_dtype.clone(), Box::new(values_array), None)?;
+    Ok(unsafe {Series::_try_from_arrow_unchecked("Array".into(), vec![Box::new(array)], &arrow_dtype)?})
 }
 
 
