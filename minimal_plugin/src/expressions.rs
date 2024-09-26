@@ -30,11 +30,8 @@ fn deserialize_dtype(dtype_expr: &str) -> PolarsResult<Option<DataType>> {
 }
 
 fn array_output_type(input_fields: &[Field], kwargs: ArrayKwargs) -> PolarsResult<Field> {
-    let dtype = deserialize_dtype(&kwargs.dtype_expr)?;
-    let expected_dtype: DataType = match dtype {
-        Some(d) => d,
-        None => input_fields[0].dtype.clone()
-    };
+    let expected_dtype = deserialize_dtype(&kwargs.dtype_expr)?
+        .unwrap_or(input_fields[0].dtype.clone());
 
     for field in input_fields.iter() {
         if !field.dtype().is_numeric() {
@@ -64,11 +61,8 @@ fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
 
 // Create a new array from a slice of series
 fn array_internal(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
-    let opt_dtype = deserialize_dtype(&kwargs.dtype_expr)?;
-    let dtype = match opt_dtype {
-        Some(ref d) => d,
-        None => inputs[0].dtype()
-    };
+    let ref dtype = deserialize_dtype(&kwargs.dtype_expr)?
+        .unwrap_or(inputs[0].dtype().clone());
 
     // Convert dtype to native numeric type and invoke array_numeric
     with_match_physical_numeric_polars_type!(dtype, |$T| {
