@@ -27,7 +27,7 @@ def build_array_i32():
     df = pl.DataFrame(
         [
             pl.Series("f1", [1, 2]),
-            pl.Series("f2", [3, 4]),
+            pl.Series("f2", [3, None]),
         ],
         schema={
             "f1": pl.Int32,
@@ -44,8 +44,8 @@ def build_array_i32():
 def build_array_i32_converted():
     df = pl.DataFrame(
         [
-            pl.Series("f1", [1, 2]),
-            pl.Series("f2", [3, 4]),
+            pl.Series("f1", [1, None]),
+            pl.Series("f2", [None, 4]),
         ],
         schema={
             "f1": pl.Int32,
@@ -60,4 +60,5 @@ def build_array_i32_converted():
     print(result)
 
 # build_array_f64()
+build_array_i32()
 build_array_i32_converted()
