@@ -1,7 +1,10 @@
 #![allow(clippy::unused_unit)]
 #![allow(unexpected_cfgs)]
+
+use std::collections::HashMap;
 use polars::prelude::*;
 use polars_plan::dsl::Expr;
+use polars_core::with_match_physical_numeric_polars_type;
 use pyo3_polars::derive::polars_expr;
 use pyo3_polars::export::polars_core::utils::Container;
 use serde::Deserialize;
@@ -28,23 +31,26 @@ fn deserialize_dtype(dtype_expr: &str) -> PolarsResult<Option<DataType>> {
 
 fn array_output_type(input_fields: &[Field], kwargs: ArrayKwargs) -> PolarsResult<Field> {
     let dtype = deserialize_dtype(&kwargs.dtype_expr)?;
-    let expected_dtype: DataType = input_fields[0].dtype.clone();
+    let expected_dtype: DataType = match dtype {
+        Some(d) => d,
+        None => input_fields[0].dtype.clone()
+    };
 
-    if !expected_dtype.is_numeric() {
-        polars_bail!(ComputeError: "all input fields must be numeric")
+    for field in input_fields.iter() {
+        if !field.dtype().is_numeric() {
+            polars_bail!(ComputeError: "all input fields must be numeric")
+        }
     }
 
-    if dtype != None  && dtype.unwrap() != expected_dtype {
-        // For now, ensure we match the dtype, if provided
-        // Question: Do we want to support casting to a provided dtype?
-        polars_bail!(ComputeError: "provided dtype does not match the input columns")
-    }
-
+    /*
+    // For now, allow casting to either the first, or provided dtype
     for field in input_fields.iter().skip(1) {
         if field.dtype != expected_dtype {
             polars_bail!(ComputeError: "all input fields must have the same type")
         }
     }
+    */
+
     Ok(Field::new(
         PlSmallStr::from_static("array"),
         DataType::Array(Box::new(expected_dtype), input_fields.len()),
@@ -58,36 +64,16 @@ fn array(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
 
 // Create a new array from a slice of series
 fn array_internal(inputs: &[Series], kwargs: ArrayKwargs) -> PolarsResult<Series> {
-
     let opt_dtype = deserialize_dtype(&kwargs.dtype_expr)?;
     let dtype = match opt_dtype {
         Some(ref d) => d,
         None => inputs[0].dtype()
     };
 
-    /*
-    I feel like there should be some kind of function to map DataType to native types
-    But, I can't seem to find it so I have a manual map for now.
-    I do also see dispatch code like this in the source code, so maybe there is no such function?
-     */
-
-    match dtype {
-        #[cfg(feature = "dtype-u8")]
-        DataType::UInt8 => array_numeric::<UInt8Type>(inputs, dtype),
-        #[cfg(feature = "dtype-u16")]
-        DataType::UInt16 => array_numeric::<UInt16Type>(inputs, dtype),
-        DataType::UInt32 => array_numeric::<UInt32Type>(inputs, dtype),
-        DataType::UInt64 => array_numeric::<UInt64Type>(inputs, dtype),
-        #[cfg(feature = "dtype-i8")]
-        DataType::Int8 => array_numeric::<Int8Type>(inputs, dtype),
-        #[cfg(feature = "dtype-i16")]
-        DataType::Int16 => array_numeric::<Int16Type>(inputs, dtype),
-        DataType::Int32 => array_numeric::<Int32Type>(inputs, dtype),
-        DataType::Int64 => array_numeric::<Int64Type>(inputs, dtype),
-        DataType::Float32 => array_numeric::<Float32Type>(inputs, dtype),
-        DataType::Float64 => array_numeric::<Float64Type>(inputs, dtype),
-        dt => polars_bail!(ComputeError: "array not implemented for dtype {:?}", dt)
-    }
+    // Convert dtype to native numeric type and invoke array_numeric
+    with_match_physical_numeric_polars_type!(dtype, |$T| {
+        array_numeric::<$T>(inputs, dtype)
+    })
 }
 
 // Combine numeric series into an array
@@ -100,8 +86,25 @@ fn array_numeric<'a, T: PolarsNumericType>(inputs: &[Series], dtype: &DataType)
     let mut rows_ca: ListPrimitiveChunkedBuilder<T> =
         ListPrimitiveChunkedBuilder::new("Array".into(), capacity, capacity,
                                          dtype.clone());
-    let mut cols_ca: Vec<_> = inputs.as_ref().iter().map(|e|
-        e.unpack::<T>().unwrap().iter()).collect();
+
+    // Support for casting
+    // Cast fields to the target dtype as needed
+    let mut casts = HashMap::new();
+    for j in 0..cols {
+        if inputs[j].dtype() != dtype {
+            let cast_input = inputs[j].cast(dtype)?;
+            casts.insert(j, cast_input);
+        }
+    }
+
+    let mut cols_ca = Vec::new();
+    for j in 0..cols {
+        if inputs[j].dtype() != dtype {
+            cols_ca.push(casts.get(&j).expect("expect conversion").unpack::<T>()?.iter());
+        } else {
+            cols_ca.push(inputs[j].unpack::<T>()?.iter());
+        }
+    }
 
     let mut row: Vec<T::Physical<'a>> = Vec::with_capacity(cols);
     for _i in 0..rows {
@@ -122,13 +125,13 @@ fn array_numeric<'a, T: PolarsNumericType>(inputs: &[Series], dtype: &DataType)
 }
 
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_array_f64() {
+        println!("\ntest_array_f64");
         let f1 = Series::new("f1".into(), &[1.0, 2.0]);
         let f2 = Series::new("f2".into(), &[3.0, 4.0]);
 
@@ -156,8 +159,7 @@ mod tests {
         assert_eq!(new_arr.unwrap().dtype(), expected_result.dtype());
     }
 
-    #[test]
-    fn test_array_i32() {
+    fn i32_series() -> (Vec<Series>, Vec<Field>){
         let f1 = Series::new("f1".into(), &[1, 2]);
         let f2 = Series::new("f2".into(), &[3, 4]);
 
@@ -174,7 +176,29 @@ mod tests {
             let f: Field = (col.field().to_mut()).clone();
             fields.push(f);
         }
+        (cols, fields)
+    }
+
+    #[test]
+    fn test_array_i32() {
+        println!("\ntest_array_i32");
+        let (cols, fields) = i32_series();
         let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Int32\"]}".to_string()};
+        let expected_result = array_output_type(&fields, kwargs.clone()).unwrap();
+        println!("expected result\n{:?}\n", &expected_result);
+
+        let new_arr = array_internal(&cols, kwargs);
+        println!("actual result\n{:?}", &new_arr);
+
+        assert!(new_arr.is_ok());
+        assert_eq!(new_arr.unwrap().dtype(), expected_result.dtype());
+    }
+
+    #[test]
+    fn test_array_i32_converted() {
+        println!("\ntest_array_i32_converted");
+        let (cols, fields) = i32_series();
+        let kwargs = ArrayKwargs{dtype_expr: "{\"DtypeColumn\":[\"Float64\"]}".to_string()};
         let expected_result = array_output_type(&fields, kwargs.clone()).unwrap();
         println!("expected result\n{:?}\n", &expected_result);
 
